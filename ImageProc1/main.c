@@ -1,12 +1,17 @@
 #pragma
 
 #include <stdio.h>
+#include <math.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <time.h>
 #include <opencv/cv.h>
 #include <opencv/highgui.h>
 
-//1836x3264
+#define K8 2
+#define K16 16
+#define K32 32
+#define EPSILON 1
 
 typedef struct BGR
 {
@@ -17,37 +22,54 @@ typedef struct BGR
 
 typedef struct DATA
 {
-	BGR data[5000][5000];
+	BGR data[1080][1920];
 	int width;
 	int height;
 } DATA;
 
-DATA g_data;
-CvMat* g_img = NULL;
+typedef struct SEGMENT
+{
+	BGR pixel[2073600];
+	unsigned int size;
+	unsigned int i[2073600];
+	unsigned int j[2073600];
+} SEGMENT;
 
+typedef struct GROUP
+{
+	BGR mean;
+	SEGMENT segment;
+} GROUP;
+
+DATA g_data;
+GROUP g_group[K8];
+CvMat* g_pImg = NULL;
+
+void setSegment();
 bool loadImage(const char* fileName);
-bool saveImage(const char* fileName);
-void printMat();
+void saveImage(const char* fileName);
+void printBGR(BGR* data);
+void copyData(BGR* destionation ,const BGR* source);
+void setMeans(unsigned char k);
+void setGroup();
+double getDistance(BGR* color1, BGR* color2);
+int findSmallestElement(double* distances, int size);
+void findAvarage(BGR* data);
+double getEpsilon(BGR* avarage);
+void setSegmentData();
 
 int main()
 {
-	int i = 0, j = 0;
+	//g_group = (GROUP*)malloc(K8 * sizeof(GROUP));
+
 	const char* loadFileName = "C:/Users/EKREMBÜLBÜL/Desktop/1.jpg";
 	const char* saveFileName = "C:/Users/EKREMBÜLBÜL/Desktop/out1.jpg";
 
-	bool result = loadImage(loadFileName);
+	auto result = loadImage(loadFileName);
 	if (!result) return 1;
 
-	printMat();
-
-	for (i = 0; i < 20; i++)
-		for (j = 0; j < g_data.width; j++)
-		{
-			g_data.data[i][j].blue = 0;
-			g_data.data[i][j].green = 0;
-			g_data.data[i][j].red = 255;
-		}
-
+	setSegment();
+	setSegmentData();
 	saveImage(saveFileName);
 
 	return 0;
@@ -59,22 +81,22 @@ bool loadImage(const char* fileName)
 
 	printf("Reading file...\n");
 
-	g_img = cvLoadImageM(fileName, CV_LOAD_IMAGE_UNCHANGED);
+	g_pImg = cvLoadImageM(fileName, CV_LOAD_IMAGE_UNCHANGED);
 	//IplImage* img = cvLoadImage(fileName, CV_LOAD_IMAGE_UNCHANGED);
-	if (!g_img)
+	if (!g_pImg)
 	{
 		printf("Image file could not be read!\n");
 		return false;
 	}
 
-	g_data.width = g_img->cols;
-	g_data.height = g_img->rows;
+	g_data.width = g_pImg->cols;
+	g_data.height = g_pImg->rows;
 
 	for (i = 0; i < g_data.height; i++)
 		for (j = 0; j < g_data.width; j++)
 		{
 			CvScalar cs;
-			cs = cvGet2D(g_img, i, j);
+			cs = cvGet2D(g_pImg, i, j);
 			g_data.data[i][j].blue = (uchar)cs.val[0];
 			g_data.data[i][j].green = (uchar)cs.val[1];
 			g_data.data[i][j].red = (uchar)cs.val[2];
@@ -85,9 +107,11 @@ bool loadImage(const char* fileName)
 	return true;
 }
 
-bool saveImage(const char* fileName)
+void saveImage(const char* fileName)
 {
 	int i = 0, j = 0;
+
+	printf("Saving file...\n");
 
 	for (i = 0; i < g_data.height; i++)
 		for (j = 0; j < g_data.width; j++)
@@ -96,26 +120,136 @@ bool saveImage(const char* fileName)
 			cs.val[0] = g_data.data[i][j].blue;
 			cs.val[1] = g_data.data[i][j].green;
 			cs.val[2] = g_data.data[i][j].red;
-			cvSet2D(g_img, i, j, cs);
+			cvSet2D(g_pImg, i, j, cs);
 		}
 
-	cvSaveImage(fileName, g_img, 0);
+	cvSaveImage(fileName, g_pImg, 0);
+
+	printf("File saved.\n");
 }
 
-void printMat()
+void setSegment()
+{
+	int i = 0;
+	setMeans(K8);
+	double epsilon = (double)LLONG_MAX;
+
+	printf("Grouping pixels...\n");
+
+	while (epsilon > EPSILON)
+	{
+		for (i = 0; i < K8; i++) g_group[i].segment.size = 0;
+		setGroup();
+		BGR avarage[K8];
+		findAvarage(avarage);
+		epsilon = getEpsilon(avarage);
+		for (i = 0; i < K8; i++) copyData(&g_group[i].mean, &avarage[i]);
+		printf("%lf\n", epsilon);
+	}
+
+	printf("Pixels grouped.\n");
+
+	for (i = 0; i < K8; i++) printBGR(&g_group[i].mean);
+}
+
+void setMeans(unsigned char k)
+{
+	unsigned char i = 0;
+	srand((unsigned int)time(NULL));
+
+	for (i = 0; i < k; i++)
+	{
+		int iRand = rand() % g_data.height;
+		int jRand = rand() % g_data.width;
+		copyData(&(g_group + i)->mean, &g_data.data[iRand][jRand]);
+	}
+}
+
+// base
+void setGroup()
+{
+	unsigned int i = 0, j = 0, k = 0;
+
+	for (i = 0; i < g_data.height; i++)
+		for (j = 0; j < g_data.width; j++)
+		{
+			double distances[K8];
+			for (k = 0; k < K8; k++) distances[k] = getDistance(&g_data.data[i][j], &g_group[k].mean);
+			int index = findSmallestElement(distances, K8);
+			g_group[index].segment.i[g_group[index].segment.size] = i;
+			g_group[index].segment.j[g_group[index].segment.size] = j;
+			copyData(&g_group[index].segment.pixel[g_group[index].segment.size], &g_data.data[i][j]);
+			g_group[index].segment.size++;
+		}
+}
+
+void printBGR(BGR* data)
+{
+	printf("%d %d %d\n", data->blue, data->green, data->red);
+}
+
+void copyData(BGR* destionation, const BGR* source)
+{
+	(*destionation).blue = (*source).blue;
+	(*destionation).green = (*source).green;
+	(*destionation).red = (*source).red;
+}
+
+double getDistance(BGR* color1, BGR* color2)
+{
+	int blue = abs(color1->blue - color2->blue);
+	int green = abs(color1->green - color2->green);
+	int red = abs(color1->red - color2->red);
+	return sqrt(blue * blue + green * green + red * red);
+}
+
+int findSmallestElement(double* distances, int size)
+{
+	int i = 0;
+	double smallest = *distances;
+	int index = 0;
+	for (i = 1; i < size; i++)
+		if (*(distances + i) < smallest)
+		{
+			smallest = *(distances + i);
+			index = i;
+		}
+	return index;
+}
+
+void findAvarage(BGR* data)
+{
+	unsigned int i = 0, j = 0;
+
+	for (i = 0; i < K8; i++)
+	{
+		int blueSum = 0;
+		int greenSum = 0;
+		int redSum = 0;
+		for (j = 0; j < g_group[i].segment.size; j++)
+		{
+			blueSum += g_group[i].segment.pixel[j].blue;
+			greenSum += g_group[i].segment.pixel[j].green;
+			redSum += g_group[i].segment.pixel[j].red;
+		}
+		if (blueSum != 0) (data + i)->blue = blueSum / g_group[i].segment.size;
+		if (greenSum != 0) (data + i)->green = greenSum / g_group[i].segment.size;
+		if (redSum != 0) (data + i)->red = redSum / g_group[i].segment.size;
+	}
+}
+
+double getEpsilon(BGR* avarage)
+{
+	int i = 0;
+	double epsilon = 0;
+	for (i = 0; i < K8; i++) epsilon += getDistance(&g_group[i].mean, avarage + i);
+	return epsilon;
+}
+
+void setSegmentData()
 {
 	int i = 0, j = 0;
-
-	printf("%d x %d\n", g_data.width, g_data.height);
-
-	for (i = 0; i < g_data.width; i++)
-	{
-		printf("( %d %d %d )\n", g_data.data[0][i].blue, g_data.data[0][i].green, g_data.data[0][i].red);
-
-		/*
-		for (j = 0; j < width; j++)
-			printf("( %d %d %d ) ", data[i][j].blue, data[i][j].green, data[i][j].red);
-		printf("\n\n");
-		*/
-	}
+	for (i = 0; i < K8; i++)
+		for (j = 0; j < g_group[i].segment.size; j++)
+			copyData(&g_data.data[g_group[i].segment.i[j]][g_group[i].segment.j[j]], &g_group[i].mean);
 }
