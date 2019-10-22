@@ -8,9 +8,6 @@
 #include <opencv/cv.h>
 #include <opencv/highgui.h>
 
-#define K8 2
-#define K16 16
-#define K32 32
 #define EPSILON 1
 
 typedef struct BGR
@@ -42,8 +39,9 @@ typedef struct GROUP
 } GROUP;
 
 DATA g_data;
-GROUP g_group[K8];
+GROUP g_group[32];
 CvMat* g_pImg = NULL;
+int g_K = 8;
 
 void setSegment();
 bool loadImage(const char* fileName);
@@ -60,17 +58,23 @@ void setSegmentData();
 
 int main()
 {
+	int i = 0;
 	//g_group = (GROUP*)malloc(K8 * sizeof(GROUP));
 
 	const char* loadFileName = "C:/Users/EKREMBÜLBÜL/Desktop/1.jpg";
-	const char* saveFileName = "C:/Users/EKREMBÜLBÜL/Desktop/out1.jpg";
+	const char* saveFileName[3] = { "C:/Users/EKREMBÜLBÜL/Desktop/out1.8.jpg", "C:/Users/EKREMBÜLBÜL/Desktop/out1.16.jpg", "C:/Users/EKREMBÜLBÜL/Desktop/out1.32.jpg" };
 
-	auto result = loadImage(loadFileName);
-	if (!result) return 1;
-
-	setSegment();
-	setSegmentData();
-	saveImage(saveFileName);
+	for (i = 0; i < 3; i++)
+	{
+		auto result = loadImage(loadFileName);
+		if (!result) return 1;
+		if (i == 0) g_K = 8;
+		else if (i == 1) g_K = 16;
+		else if (i == 2) g_K = 32;
+		setSegment();
+		setSegmentData();
+		saveImage(saveFileName[i]);
+	}
 
 	return 0;
 }
@@ -131,25 +135,25 @@ void saveImage(const char* fileName)
 void setSegment()
 {
 	int i = 0;
-	setMeans(K8);
+	setMeans(g_K);
 	double epsilon = (double)LLONG_MAX;
 
 	printf("Grouping pixels...\n");
 
 	while (epsilon > EPSILON)
 	{
-		for (i = 0; i < K8; i++) g_group[i].segment.size = 0;
+		for (i = 0; i < g_K; i++) g_group[i].segment.size = 0;
 		setGroup();
-		BGR avarage[K8];
+		BGR avarage[32];
 		findAvarage(avarage);
 		epsilon = getEpsilon(avarage);
-		for (i = 0; i < K8; i++) copyData(&g_group[i].mean, &avarage[i]);
+		for (i = 0; i < g_K; i++) copyData(&g_group[i].mean, &avarage[i]);
 		printf("%lf\n", epsilon);
 	}
 
 	printf("Pixels grouped.\n");
 
-	for (i = 0; i < K8; i++) printBGR(&g_group[i].mean);
+	for (i = 0; i < g_K; i++) printBGR(&g_group[i].mean);
 }
 
 void setMeans(unsigned char k)
@@ -173,9 +177,9 @@ void setGroup()
 	for (i = 0; i < g_data.height; i++)
 		for (j = 0; j < g_data.width; j++)
 		{
-			double distances[K8];
-			for (k = 0; k < K8; k++) distances[k] = getDistance(&g_data.data[i][j], &g_group[k].mean);
-			int index = findSmallestElement(distances, K8);
+			double distances[32];
+			for (k = 0; k < g_K; k++) distances[k] = getDistance(&g_data.data[i][j], &g_group[k].mean);
+			int index = findSmallestElement(distances, g_K);
 			g_group[index].segment.i[g_group[index].segment.size] = i;
 			g_group[index].segment.j[g_group[index].segment.size] = j;
 			copyData(&g_group[index].segment.pixel[g_group[index].segment.size], &g_data.data[i][j]);
@@ -221,7 +225,7 @@ void findAvarage(BGR* data)
 {
 	unsigned int i = 0, j = 0;
 
-	for (i = 0; i < K8; i++)
+	for (i = 0; i < g_K; i++)
 	{
 		int blueSum = 0;
 		int greenSum = 0;
@@ -242,14 +246,14 @@ double getEpsilon(BGR* avarage)
 {
 	int i = 0;
 	double epsilon = 0;
-	for (i = 0; i < K8; i++) epsilon += getDistance(&g_group[i].mean, avarage + i);
+	for (i = 0; i < g_K; i++) epsilon += getDistance(&g_group[i].mean, avarage + i);
 	return epsilon;
 }
 
 void setSegmentData()
 {
 	int i = 0, j = 0;
-	for (i = 0; i < K8; i++)
+	for (i = 0; i < g_K; i++)
 		for (j = 0; j < g_group[i].segment.size; j++)
 			copyData(&g_data.data[g_group[i].segment.i[j]][g_group[i].segment.j[j]], &g_group[i].mean);
 }
